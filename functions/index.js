@@ -18,51 +18,6 @@ app.use(cors({origin: true}));
 const admin = require("firebase-admin");
 admin.initializeApp();
 
-exports.sendLikeNotification = functions.firestore
-    .document("polls/{pollId}")
-    .onUpdate(async (change, context) => {
-        const newValue = change.after.data();
-        const previousValue = change.before.data();
-        
-        // Check if likes arrays exist and have length property
-        const newLikes = newValue.likes || [];
-        const previousLikes = previousValue.likes || [];
-        
-        if (newLikes.length > previousLikes.length) {
-            const ownerId = newValue.ownerId;
-            const likedByUser = newLikes[newLikes.length - 1];
-            
-            // Fetch owner document
-            const ownerDoc = await admin.firestore().collection("users").doc(ownerId).get();
-            if (!ownerDoc.exists) {
-                console.log("Owner document not found");
-                return;
-            }
-            const ownerToken = ownerDoc.data().fcmToken;
-            
-            // Fetch likedByUser document
-            const likedByUserDoc = await admin.firestore().collection("users").doc(likedByUser).get();
-            if (!likedByUserDoc.exists) {
-                console.log("Liked by user document not found");
-                return;
-            }
-            const likedByUsername = likedByUserDoc.data().username;
-            
-            const message = {
-                notification: {
-                    title: "New Like!",
-                    body: `${likedByUsername} liked your photo`
-                },
-                token: ownerToken
-            };
-            
-            try {
-                await admin.messaging().send(message);
-            } catch (error) {
-                console.log("Error sending message:", error);
-            }
-        }
-    });
 
 exports.sendVoteNotification = functions.firestore
     .document("polls/{pollId}")
@@ -84,25 +39,54 @@ exports.sendVoteNotification = functions.firestore
             const newVoteId = Object.keys(updatedOption.votes).find(key => 
                 !previousValue.pollOptions.find(o => o.id === updatedOption.id).votes[key]
             );
+
             console.log("newVoteId", newVoteId);
             console.log("pollOptionUserId", pollOptionUserId);
-            
+
             const userDoc = await admin.firestore().collection("users").doc(pollOptionUserId).get();
+            console.log("pollOptionUserId****************************************************", pollOptionUserId);
             const userToken = userDoc.data().fcmToken;
+            console.log("userToken****************************************************", userToken);
             
             const votedByUserDoc = await admin.firestore().collection("users").doc(newVoteId).get();
-            const votedByUsername = votedByUserDoc.data().username;
-            
+            const votedByUsername = votedByUserDoc.data().firstName;
+                     
+            const imageUrl = "https://play-lh.googleusercontent.com/ZcYo7MXo6XuUzjbTPOE0Dz6p25QqB6mmkpYn0WNB8odFlVkpHrpozYENhUbFpcrSrGw";
+
             const message = {
                 notification: {
                     title: "New Vote!",
-                    body: `${votedByUsername} voted for your poll option`,
+                    body: `${votedByUsername} voted for you in a poll`,
+                    imageUrl: imageUrl
                 },
-                token: userToken,
-            };
+                android: {
+                  notification: {
+                    imageUrl: imageUrl
+                  }
+                },
+                apns: {
+                  payload: {
+                    aps: {
+                      'mutable-content': 1
+                    }
+                  },
+                  fcm_options: {
+                    image: imageUrl
+                  }
+                },
+                webpush: {
+                  headers: {
+                    image: imageUrl
+                  }
+                },
+                token: ownerToken
+              };
+              
+              console.log("Sending message:", JSON.stringify(message));
             
             try {
                 await admin.messaging().send(message);
+                console.log("Message sent successfully");
             } catch (error) {
                 console.log("Error sending message:", error);
             }
