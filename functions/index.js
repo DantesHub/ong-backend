@@ -142,13 +142,15 @@ exports.schoolUnlockNotification = functions.firestore
         console.log("schoolUnlockNotification function triggered");
 
         // if there are >= 14 students in the school, send a notification to all users in the school
-        if (newValue.studentCount >= 14) {
+        if (Object.keys(newValue.students).length >= 14) {
             console.log("School has >= 14 students, sending notification to all users in the school");
 
             const schoolUsers = await admin.firestore().collection(USERS_COLLECTION).where("schoolId", "==", context.params.schoolId).get();
             const userTokens = schoolUsers.docs.map(doc => doc.data().fcmToken);
 
-            await sendNotification(userTokens, "Your school is now unlocked!", "Tap to start voting");
+            for (const token of userTokens) {
+                await sendNotification(token, "Your school is now unlocked!", "Tap to start voting");
+            }
         }
     });
 
