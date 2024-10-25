@@ -7,19 +7,32 @@ const app = express();
 // Automatically allow cross-origin requests
 app.use(cors({origin: true}));
 
-// Define a simple route
-// app.get("/hello", (req, res) => {
-//   res.send("Hello from Firebase!");
-// });
-
-// // Expose Express API as a single Cloud Function
-// exports.api = functions.https.onRequest(app);
 
 const admin = require("firebase-admin");
 admin.initializeApp();
 
-exports.sendFriendNotification = functions.firestore
-    .document("users/{userId}")
+async function sendNotification(token, title, body) {
+    const message = {
+        notification: { title, body },
+        token: token,
+    };
+
+    console.log("Sending message:", JSON.stringify(message));
+
+    try {
+        const response = await admin.messaging().send(message);
+        console.log("Notification sent successfully:", response);
+    } catch (error) {
+        console.error("Error sending notification:", error);
+    }
+}
+
+const USERS_COLLECTION = "_users";
+const SCHOOLS_COLLECTION = "_schools";
+const VOTES_COLLECTION = "_votes";
+
+exports.sendFriendRequestNotification = functions.firestore
+    .document(`${USERS_COLLECTION}/{userId}`)
     .onUpdate(async (change, context) => {
         console.log("sendFriendNotification function triggered");
         
@@ -30,126 +43,133 @@ exports.sendFriendNotification = functions.firestore
         console.log("Previous value:", JSON.stringify(previousValue));
         
         try {
-            // Check if friendRequests exists and is an object
-            if (typeof newValue.friendRequests !== 'object' || typeof previousValue.friendRequests !== 'object') {
-                console.log("friendRequests is not an object in new or previous value");
+            if (typeof newValue.incomingFriendRequests !== 'object' || typeof previousValue.incomingFriendRequests !== 'object') {
+                console.log("incomingFriendRequests is not an object in new or previous value");
                 return;
             }
-
-            const newFriendRequestsCount = Object.keys(newValue.friendRequests).length;
-            const previousFriendRequestsCount = Object.keys(previousValue.friendRequests).length;
-
-            console.log("New friend requests count:", newFriendRequestsCount);
-            console.log("Previous friend requests count:", previousFriendRequestsCount);
-
+        
+            // Check for new friend request
+            const newFriendRequestsCount = Object.keys(newValue.incomingFriendRequests).length;
+            const previousFriendRequestsCount = Object.keys(previousValue.incomingFriendRequests).length;
+        
             if (newFriendRequestsCount > previousFriendRequestsCount) {
                 console.log("New friend request detected");
                 
-                // Find the new friendRequest
-                const newFriendRequestId = Object.keys(newValue.friendRequests).find(
-                    id => !previousValue.friendRequests.hasOwnProperty(id)
+                const newFriendRequestId = Object.keys(newValue.incomingFriendRequests).find(
+                    id => !previousValue.incomingFriendRequests.hasOwnProperty(id)
                 );
-
+        
                 console.log("New friend request ID:", newFriendRequestId);
-
+        
                 if (newFriendRequestId) {
-                    const userDoc = await admin.firestore().collection("users").doc(context.params.userId).get();
+                    const userDoc = await admin.firestore().collection(USERS_COLLECTION).doc(context.params.userId).get();
                     if (!userDoc.exists) {
                         console.log("User document not found");
                         return;
                     }
                     const userToken = userDoc.data().fcmToken;
-                    console.log("User FCM token:", userToken);
-
-                    const friendDoc = await admin.firestore().collection("users").doc(newFriendRequestId).get();
+        
+                    const friendDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newFriendRequestId).get();
                     if (!friendDoc.exists) {
                         console.log("Friend document not found");
                         return;
                     }
                     const requestName = friendDoc.data().firstName;
-                    console.log("Friend name:", requestName);
+        
+                    await sendNotification(userToken, `${requestName} wants to be friends`, "Tap to view friend request");
+                }    
+            }   
 
-                    const message = {
-                        notification: {
-                            title: `${requestName} wants to be friends`,
-                            body: "Tap to view friend request"
-                        },
-                        token: userToken,
-                    };
-
-                    console.log("Sending message:", JSON.stringify(message));
-
-                    const response = await admin.messaging().send(message);
-                    console.log("Notification sent successfully:", response);
-                } else {
-                    console.log("New friend request ID not found");
-                }
-            } else {
-                console.log("No new friend request detected");
-            }
         } catch (error) {
             console.error("Error in sendFriendNotification:", error);
         }
     });
 
-exports.isHighschoolStillLocked = functions.firestore
-    .document("highschools/{highschoolId}")
+
+exports.acceptFriendRequestNotification = functions.firestore
+    .document(`${USERS_COLLECTION}/{userId}`)
+    .onUpdate(async (change, context) => {
+        console.log("acceptFriendRequestNotification function triggered");
+        
+        const newValue = change.after.data();
+        const previousValue = change.before.data();
+        
+        try {
+            if (typeof newValue.friends !== 'object' || typeof previousValue.friends !== 'object') {
+                console.log("friends is not an object in new or previous value");
+                return;
+            }
+        
+            const newFriendsCount = Object.keys(newValue.friends).length;
+            const previousFriendsCount = Object.keys(previousValue.friends).length;
+        
+            if (newFriendsCount > previousFriendsCount) {
+                console.log("New friend detected (friend request accepted)");
+            
+                const newFriendId = Object.keys(newValue.friends).find(
+                    id => !previousValue.friends.hasOwnProperty(id)
+                );
+            
+                console.log("New friend ID:", newFriendId);
+            
+                if (newFriendId) {
+                    const friendDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newFriendId).get();
+                    if (!friendDoc.exists) {
+                        console.log("Friend document not found");
+                        return;
+                    }
+                    const friendToken = friendDoc.data().fcmToken;
+                    const userName = newValue.firstName;
+            
+                    await sendNotification(friendToken, `${userName} accepted your friend request`, "You are now friends!");
+                }
+            }
+
+        } catch (error) {
+            console.error("Error in sendFriendNotification:", error);
+        }
+    });
+
+
+
+
+exports.schoolUnlockNotification = functions.firestore
+    .document(`${SCHOOLS_COLLECTION}/{schoolId}`)
     .onUpdate(async (change, context) => {
         const newValue = change.after.data();
         const previousValue = change.before.data();
         
-        
+        console.log("schoolUnlockNotification function triggered");
+
+        // if there are >= 14 students in the school, send a notification to all users in the school
+        if (newValue.studentCount >= 14) {
+            console.log("School has >= 14 students, sending notification to all users in the school");
+
+            const schoolUsers = await admin.firestore().collection(USERS_COLLECTION).where("schoolId", "==", context.params.schoolId).get();
+            const userTokens = schoolUsers.docs.map(doc => doc.data().fcmToken);
+
+            await sendNotification(userTokens, "Your school is now unlocked!", "Tap to start voting");
+        }
     });
 
 exports.sendVoteNotification = functions.firestore
-    .document("polls/{pollId}")
+    .document(`${VOTES_COLLECTION}/{voteId}`)
     .onUpdate(async (change, context) => {
         const newValue = change.after.data();
         const previousValue = change.before.data();
 
-        console.log("New value:", JSON.stringify(newValue));
-        console.log("Previous value:", JSON.stringify(previousValue));
-        
-        // Find the poll option that got a new vote
-        const updatedOption = newValue.pollOptions.find((option, index) => {
-            const prevOption = previousValue.pollOptions[index];
-            return Object.keys(option.votes).length > Object.keys(prevOption.votes).length;
-        });
-        
-        if (updatedOption) {
-            const pollOptionUserId = updatedOption.userId;
-            const newVoteId = Object.keys(updatedOption.votes).find(key => 
-                !previousValue.pollOptions.find(o => o.id === updatedOption.id).votes[key]
-            );
+        console.log("sendVoteNotification function triggered");
 
-            console.log("newVoteId", newVoteId);
-            console.log("pollOptionUserId", pollOptionUserId);
+        const userDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newValue.votedForId).get();
+        const userToken = userDoc.data().fcmToken;
 
-            const userDoc = await admin.firestore().collection("users").doc(pollOptionUserId).get();
-            console.log("pollOptionUserId****************************************************", pollOptionUserId);
-            const userToken = userDoc.data().fcmToken;
-            console.log("userToken****************************************************", userToken, userDoc.data());
-            
-            const votedByUserDoc = await admin.firestore().collection("users").doc(newVoteId).get();
-            console.log("votedByUserDoc****************************************************", votedByUserDoc.data());
+        const votedByUserDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newValue.voterId).get();
+        const votedByGender = votedByUserDoc.data().gender;
+        const votedByGrade = votedByUserDoc.data().grade;
 
-            const votedbyGender = votedByUserDoc.data().gender;
-            const votedbyGrade = votedByUserDoc.data().grade;
-
-            const message = {
-                notification: {
-                    title: `A ${votedbyGender} from ${votedbyGrade} voted for you!`,
-                    body: `Tap to see details`,
-                    imageUrl: "https://play-lh.googleusercontent.com/ZcYo7MXo6XuUzjbTPOE0Dz6p25QqB6mmkpYn0WNB8odFlVkpHrpozYENhUbFpcrSrGw"
-                },
-                token: userToken,
-            };
-            
-            try {
-                await admin.messaging().send(message);
-                console.log("Message sent successfully");
-            } catch (error) {
-                console.log("Error sending message:", error);
-            }
-        }
+        await sendNotification(
+            userToken,
+            `A ${votedByGender} from ${votedByGrade} voted for you!`,
+            "Tap to see what the question was"
+        );
     });
