@@ -12,9 +12,21 @@ const admin = require("firebase-admin");
 admin.initializeApp();
 
 async function sendNotification(token, title, body) {
+    if (!token) {
+        console.log("No valid FCM token provided. Skipping notification.");
+        return;
+    }
+
     const message = {
         notification: { title, body },
         token: token,
+        apns: {
+            payload: {
+                aps: {
+                    sound: 'default',
+                }
+            }
+        }
     };
 
     console.log("Sending message:", JSON.stringify(message));
@@ -28,150 +40,98 @@ async function sendNotification(token, title, body) {
 }
 
 const USERS_COLLECTION = "_users";
-const SCHOOLS_COLLECTION = "_schools";
-const VOTES_COLLECTION = "_votes";
+const NOTIFICATIONS_COLLECTION = "_notifications";
 
-exports.sendFriendRequestNotification = functions.firestore
-    .document(`${USERS_COLLECTION}/{userId}`)
-    .onUpdate(async (change, context) => {
-        console.log("sendFriendNotification function triggered");
+exports.sendNotification = functions.firestore
+    .document(`${NOTIFICATIONS_COLLECTION}/{notificationId}`)
+    .onCreate(async (snapshot, context) => {
+        console.log("New notification created:", context.params.notificationId);
         
-        const newValue = change.after.data();
-        const previousValue = change.before.data();
-
-        console.log("New value:", JSON.stringify(newValue));
-        console.log("Previous value:", JSON.stringify(previousValue));
+        const notification = snapshot.data();
         
         try {
-            if (typeof newValue.incomingFriendRequests !== 'object' || typeof previousValue.incomingFriendRequests !== 'object') {
-                console.log("incomingFriendRequests is not an object in new or previous value");
+            // Get recipient's FCM token
+            const recipientDoc = await admin.firestore()
+                .collection(USERS_COLLECTION)
+                .doc(notification.recipientId)
+                .get();
+
+            if (!recipientDoc.exists) {
+                console.log("Recipient not found");
                 return;
             }
-        
-            // Check for new friend request
-            const newFriendRequestsCount = Object.keys(newValue.incomingFriendRequests).length;
-            const previousFriendRequestsCount = Object.keys(previousValue.incomingFriendRequests).length;
-        
-            if (newFriendRequestsCount > previousFriendRequestsCount) {
-                console.log("New friend request detected");
+
+            const recipientToken = recipientDoc.data().fcmToken;
+            if (!recipientToken) {
+                console.log("Recipient has no FCM token");
+                return;
+            }
+
+            // Get sender's info for notifications that need it
+            let senderName = "";
+            let senderGender = "";
+            let senderGrade = "";
+            if (notification.senderId) {
+                const senderDoc = await admin.firestore()
+                    .collection(USERS_COLLECTION)
+                    .doc(notification.senderId)
+                    .get();
                 
-                const newFriendRequestId = Object.keys(newValue.incomingFriendRequests).find(
-                    id => !previousValue.incomingFriendRequests.hasOwnProperty(id)
-                );
-        
-                console.log("New friend request ID:", newFriendRequestId);
-        
-                if (newFriendRequestId) {
-                    const userDoc = await admin.firestore().collection(USERS_COLLECTION).doc(context.params.userId).get();
-                    if (!userDoc.exists) {
-                        console.log("User document not found");
-                        return;
-                    }
-                    const userToken = userDoc.data().fcmToken;
-        
-                    const friendDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newFriendRequestId).get();
-                    if (!friendDoc.exists) {
-                        console.log("Friend document not found");
-                        return;
-                    }
-                    const requestName = friendDoc.data().firstName;
-        
-                    await sendNotification(userToken, `${requestName} wants to be friends`, "Tap to view friend request");
-                }    
-            }   
-
-        } catch (error) {
-            console.error("Error in sendFriendNotification:", error);
-        }
-    });
-
-
-exports.acceptFriendRequestNotification = functions.firestore
-    .document(`${USERS_COLLECTION}/{userId}`)
-    .onUpdate(async (change, context) => {
-        console.log("acceptFriendRequestNotification function triggered");
-        
-        const newValue = change.after.data();
-        const previousValue = change.before.data();
-        
-        try {
-            if (typeof newValue.friends !== 'object' || typeof previousValue.friends !== 'object') {
-                console.log("friends is not an object in new or previous value");
-                return;
-            }
-        
-            const newFriendsCount = Object.keys(newValue.friends).length;
-            const previousFriendsCount = Object.keys(previousValue.friends).length;
-        
-            if (newFriendsCount > previousFriendsCount) {
-                console.log("New friend detected (friend request accepted)");
-            
-                const newFriendId = Object.keys(newValue.friends).find(
-                    id => !previousValue.friends.hasOwnProperty(id)
-                );
-            
-                console.log("New friend ID:", newFriendId);
-            
-                if (newFriendId) {
-                    const friendDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newFriendId).get();
-                    if (!friendDoc.exists) {
-                        console.log("Friend document not found");
-                        return;
-                    }
-                    const friendToken = friendDoc.data().fcmToken;
-                    const userName = newValue.firstName;
-            
-                    await sendNotification(friendToken, `${userName} accepted your friend request`, "You are now friends!");
+                if (senderDoc.exists) {
+                    senderName = senderDoc.data().firstName || "Someone";
+                    senderGender = senderDoc.data().gender || "unknown";
+                    senderGrade = senderDoc.data().grade || "unknown";
                 }
             }
 
-        } catch (error) {
-            console.error("Error in sendFriendNotification:", error);
-        }
-    });
-
-
-
-
-exports.schoolUnlockNotification = functions.firestore
-    .document(`${SCHOOLS_COLLECTION}/{schoolId}`)
-    .onUpdate(async (change, context) => {
-        const newValue = change.after.data();
-        const previousValue = change.before.data();
-        
-        console.log("schoolUnlockNotification function triggered");
-
-        // if there are >= 14 students in the school, send a notification to all users in the school
-        if (Object.keys(newValue.students).length >= 14) {
-            console.log("School has >= 14 students, sending notification to all users in the school");
-
-            const schoolUsers = await admin.firestore().collection(USERS_COLLECTION).where("schoolId", "==", context.params.schoolId).get();
-            const userTokens = schoolUsers.docs.map(doc => doc.data().fcmToken);
-
-            for (const token of userTokens) {
-                await sendNotification(token, "Your school is now unlocked!", "Tap to start voting");
+            // Construct notification message based on type
+            const message = await constructNotificationMessage(notification, senderName, senderGender, senderGrade);
+            if (!message) {
+                console.log("No message constructed for notification type:", notification.type);
+                return;
             }
+
+            await sendNotification(recipientToken, message.title, message.body);
+
+        } catch (error) {
+            console.error("Error sending notification:", error);
         }
     });
 
-exports.sendVoteNotification = functions.firestore
-    .document(`${VOTES_COLLECTION}/{voteId}`)
-    .onUpdate(async (change, context) => {
-        const newValue = change.after.data();
-        const previousValue = change.before.data();
+async function constructNotificationMessage(notification, senderName, senderGender, senderGrade) {
+    switch (notification.type) {
+        case 'friendRequest':
+            return {
+                title: "new friend request",
+                body: `${senderName} wants to be friends`
+            };
+        case 'friendAccepted':
+            return {
+                title: "mo homies no problems",
+                body: `${senderName} accepted your friend request`
+            };
 
-        console.log("sendVoteNotification function triggered");
+        case 'pollPick':
+            return {
+                title: `a ${senderGender} from ${senderGrade} picked you`,
+                body: `wanna see what question it was?`
+            };
 
-        const userDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newValue.votedForId).get();
-        const userToken = userDoc.data().fcmToken;
+        case 'auraDecay':
+            return {
+                title: "ur losing aura and it shows",
+                body: "answer some polls to get it back"
+            };
 
-        const votedByUserDoc = await admin.firestore().collection(USERS_COLLECTION).doc(newValue.voterId).get();
-        const votedByGender = votedByUserDoc.data().gender;
-        const votedByGrade = votedByUserDoc.data().grade;
+        case 'schoolUnlocked':
+            const schoolName = notification.metadata?.schoolName || "A new school";
+            return {
+                title: "new school unlocked",
+                body: `${schoolName} is now ready`
+            };
 
-        await sendNotification(
-            userToken,
-            `A ${votedByGender} from ${votedByGrade} voted for you!`,
-            "Tap to see what the question was"
-        );
-    });
+        default:
+            console.log("Unknown notification type:", notification.type);
+            return null;
+    }
+}
