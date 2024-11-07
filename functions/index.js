@@ -107,7 +107,7 @@ async function constructNotificationMessage(notification, senderName, senderGend
             };
         case 'friendAccepted':
             return {
-                title: "mo homies no problems",
+                title: "yo you got more homies now",
                 body: `${senderName} accepted your friend request`
             };
 
@@ -115,6 +115,18 @@ async function constructNotificationMessage(notification, senderName, senderGend
             return {
                 title: `a ${senderGender} from ${senderGrade} picked you`,
                 body: `wanna see what question it was?`
+            };
+        
+        case 'letterRevealed':
+            return {
+                title: `a ${senderGender} from ${senderGrade} revealed the first letter of ur name`,
+                body: `next time use a shield`
+            };
+
+        case 'shieldRevealed':
+            return {
+                title: `ur shield just blocked a reveal`,
+                body: `cop more shields to stay anonymous`
             };
 
         case 'auraDecay':
