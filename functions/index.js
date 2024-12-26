@@ -1,15 +1,18 @@
 const functions = require("firebase-functions");
 const express = require("express");
 const cors = require("cors");
+const admin = require("firebase-admin");
+const { createSchool } = require('./createSchool');
+
+admin.initializeApp();
 
 const app = express();
 
 // Automatically allow cross-origin requests
 app.use(cors({origin: true}));
 
-
-const admin = require("firebase-admin");
-admin.initializeApp();
+// Export the createSchool function
+exports.createSchool = createSchool;
 
 async function sendNotification(token, title, body, deepLink) {
     if (!token) {
@@ -113,17 +116,22 @@ async function constructNotificationMessage(notification, senderName, senderGend
                 body: `${senderName} accepted your friend request`,
                 deepLink: `ong://friends/profile/${notification.senderId}`
             };
-
+        case "referral":
+            return {
+                title:  `${senderName} used ur referral code!`,
+                body: `u got +5 🍞 bread`,
+                deepLink: `ong://referrals/code/${notification.senderId}`
+            };
         case 'pollPick':
             return {
-                title: `a ${senderGender} from ${senderGrade} picked you`,
+                title: `a ${senderGender} picked you`,
                 body: `wanna see what question it was?`,
                 deepLink: `ong://polls/picked/${notification.pollId}`
             };
         
         case 'letterRevealed':
             return {
-                title: `a ${senderGender} from ${senderGrade} revealed the first letter of ur name`,
+                title: `a ${senderGender} revealed the first letter of ur name`,
                 body: `next time use a shield`,
                 deepLink: `ong://reveals/letter/${notification.revealId}`
             };
